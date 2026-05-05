@@ -431,6 +431,7 @@
 
   .pill-a { background: var(--rose-mid); color: var(--rose-dark); }
   .pill-b { background: var(--teal-mid); color: var(--teal-dark); }
+  .pill-individual { background: #EBEBF0; color: var(--slate-mid); }
 
   .expense-right { text-align: right; flex-shrink: 0; }
   .expense-value { font-family: 'DM Serif Display', serif; font-size: 1.1rem; color: var(--slate); }
@@ -494,7 +495,7 @@
 
   .form-input:focus { border-color: var(--rose); box-shadow: 0 0 0 3px rgba(232,100,122,0.12); }
 
-  .split-toggle {
+  .ownership-toggle {
     display: grid;
     grid-template-columns: 1fr 1fr;
     gap: 0;
@@ -503,7 +504,7 @@
     overflow: hidden;
   }
 
-  .split-opt {
+  .ownership-opt {
     padding: 10px;
     text-align: center;
     cursor: pointer;
@@ -516,26 +517,9 @@
     font-family: 'DM Sans', sans-serif;
   }
 
-  .split-opt.active { background: var(--rose); color: white; }
-  .split-opt:first-child { border-right: 1px solid var(--border); }
-
-  .prop-sliders {
-    display: none;
-    grid-template-columns: 1fr 1fr;
-    gap: 14px;
-    margin-top: 10px;
-  }
-
-  .prop-sliders.show { display: grid; }
-
-  .slider-group { display: flex; flex-direction: column; gap: 4px; }
-  .slider-label { font-size: 12px; color: var(--slate-mid); display: flex; justify-content: space-between; }
-  .slider-label span { font-weight: 700; color: var(--slate); }
-
-  input[type=range] {
-    width: 100%;
-    accent-color: var(--rose);
-  }
+  .ownership-opt.active { background: var(--rose); color: white; }
+  .ownership-opt.active.individual { background: var(--slate); }
+  .ownership-opt:first-child { border-right: 1px solid var(--border); }
 
   .form-submit {
     width: 100%;
@@ -893,20 +877,10 @@
           </div>
 
           <div class="form-group full">
-            <label class="form-label">Tipo de divisão</label>
-            <div class="split-toggle">
-              <button class="split-opt active" id="split-50" onclick="setSplit('50')">50% / 50%</button>
-              <button class="split-opt" id="split-prop" onclick="setSplit('prop')">Proporcional</button>
-            </div>
-            <div class="prop-sliders" id="prop-sliders">
-              <div class="slider-group">
-                <div class="slider-label" id="slider-label-a">Pessoa A <span id="pct-a-val">60%</span></div>
-                <input type="range" id="slider-a" min="10" max="90" value="60" oninput="updateSlider(this.value)">
-              </div>
-              <div class="slider-group">
-                <div class="slider-label" id="slider-label-b">Pessoa B <span id="pct-b-val">40%</span></div>
-                <input type="range" id="slider-b" min="10" max="90" value="40" disabled style="opacity:0.5">
-              </div>
+            <label class="form-label">Tipo de gasto</label>
+            <div class="ownership-toggle">
+              <button class="ownership-opt active" id="own-shared" onclick="setOwnership('shared')">🤝 Do casal</button>
+              <button class="ownership-opt individual" id="own-individual" onclick="setOwnership('individual')">👤 Conta individual</button>
             </div>
           </div>
 
@@ -1015,6 +989,13 @@
         <label class="form-label">Observação</label>
         <input class="form-input" id="m-obs" type="text">
       </div>
+      <div class="form-group full">
+        <label class="form-label">Tipo de gasto</label>
+        <div class="ownership-toggle">
+          <button class="ownership-opt active" id="m-own-shared" onclick="setModalOwnership('shared')">🤝 Do casal</button>
+          <button class="ownership-opt individual" id="m-own-individual" onclick="setModalOwnership('individual')">👤 Conta individual</button>
+        </div>
+      </div>
     </div>
     <button class="form-submit" onclick="saveEdit()" style="margin-top:1rem;">Salvar alterações</button>
   </div>
@@ -1044,7 +1025,7 @@ let currentMonth = new Date().getMonth();
 let currentYear  = new Date().getFullYear();
 let currentFilter = 'todos';
 let editingId = null;
-let splitMode = '50';
+let ownershipMode = 'shared'; // 'shared' or 'individual'
 let lastVersion = 0;
 
 // ═══════════════════════════════════════════
@@ -1222,34 +1203,27 @@ function renderDashboard() {
   document.getElementById('bal-pct-b').textContent = `${pctB}% do total`;
   document.getElementById('bar-fill-a').style.width = `${pctA}%`;
 
-  // Verdict — calcula quanto cada um deve pela divisão ponderada
+  // Verdict — calcula quanto cada um deve considerando apenas gastos compartilhados
   let verdict = '';
   if (expenses.length === 0) {
     verdict = `<div class="verdict even"><div class="verdict-icon">✨</div><div class="verdict-text"><div class="verdict-title">Nenhum gasto ainda</div><div class="verdict-detail">Adicione o primeiro gasto do mês.</div></div></div>`;
   } else {
-    // Calcula dívida considerando as divisões individuais de cada gasto
-    let deveA = 0, deveB = 0;
-    expenses.forEach(e => {
-      const pA = e.splitMode === 'prop' ? (e.pctA || 50) / 100 : 0.5;
-      const pB = 1 - pA;
-      if (e.quem === 'A') { deveB += e.valor * pB; deveA += 0; /* A pagou, B deve a parte dele */ }
-      else { deveA += e.valor * pA; deveB += 0; }
-    });
-    // A deve receber: o que A pagou menos o que B já pagou pela parte de A...
-    // Simplificando: saldo = totalA pago - totalA deveria pagar
+    const shared = expenses.filter(e => e.ownership !== 'individual');
+    // Cada gasto compartilhado divide 50/50
     let saldoA = 0;
-    expenses.forEach(e => {
-      const pA = e.splitMode === 'prop' ? (e.pctA || 50) / 100 : 0.5;
-      if (e.quem === 'A') saldoA += e.valor * (1 - pA); // A overpagou (pB * valor)
-      else saldoA -= e.valor * pA; // B pagou, A deve (pA * valor)
+    shared.forEach(e => {
+      if (e.quem === 'A') saldoA += e.valor * 0.5; // A pagou mais do que devia (metade é de B)
+      else saldoA -= e.valor * 0.5;                 // B pagou, A ainda deve metade
     });
     const diff = Math.abs(saldoA);
-    if (diff < 0.5) {
+    if (shared.length === 0) {
+      verdict = `<div class="verdict even"><div class="verdict-icon">👤</div><div class="verdict-text"><div class="verdict-title">Só gastos individuais</div><div class="verdict-detail">Nenhum gasto do casal este mês.</div></div></div>`;
+    } else if (diff < 0.5) {
       verdict = `<div class="verdict even"><div class="verdict-icon">🎉</div><div class="verdict-text"><div class="verdict-title">Tá na conta! Tudo equilibrado.</div><div class="verdict-detail">Os dois pagaram a parte certa este mês.</div></div></div>`;
     } else if (saldoA > 0) {
-      verdict = `<div class="verdict owes"><div class="verdict-icon">💸</div><div class="verdict-text"><div class="verdict-title">${names.B} deve para ${names.A}</div><div class="verdict-detail">Para equilibrar as contas</div></div><div class="verdict-amount">${fmt(diff)}</div></div>`;
+      verdict = `<div class="verdict owes"><div class="verdict-icon">💸</div><div class="verdict-text"><div class="verdict-title">${names.B} deve para ${names.A}</div><div class="verdict-detail">Para equilibrar os gastos do casal</div></div><div class="verdict-amount">${fmt(diff)}</div></div>`;
     } else {
-      verdict = `<div class="verdict owes"><div class="verdict-icon">💸</div><div class="verdict-text"><div class="verdict-title">${names.A} deve para ${names.B}</div><div class="verdict-detail">Para equilibrar as contas</div></div><div class="verdict-amount">${fmt(diff)}</div></div>`;
+      verdict = `<div class="verdict owes"><div class="verdict-icon">💸</div><div class="verdict-text"><div class="verdict-title">${names.A} deve para ${names.B}</div><div class="verdict-detail">Para equilibrar os gastos do casal</div></div><div class="verdict-amount">${fmt(diff)}</div></div>`;
     }
   }
   document.getElementById('verdict-wrap').innerHTML = verdict;
@@ -1303,7 +1277,8 @@ function expenseItemHTML(e) {
   const pillClass = e.quem === 'A' ? 'pill-a' : 'pill-b';
   const bg = (CAT_COLORS[e.cat] || '#888') + '22';
   const dateStr = e.data ? e.data.split('-').reverse().join('/') : '';
-  const splitLabel = e.splitMode === 'prop' ? `${e.pctA||50}/${100-(e.pctA||50)}` : '50/50';
+  const isIndividual = e.ownership === 'individual';
+  const ownershipBadge = isIndividual ? `<span class="pill pill-individual">individual</span>` : '';
   return `
     <div class="expense-item" id="exp-${e.id}">
       <div class="expense-icon-wrap" style="background:${bg}">${CAT_EMOJI[e.cat]||'📦'}</div>
@@ -1311,11 +1286,10 @@ function expenseItemHTML(e) {
         <div class="expense-desc">${e.desc}</div>
         <div class="expense-meta">
           <span class="pill ${pillClass}">${name}</span>
+          ${ownershipBadge}
           <span>${e.cat}</span>
           <span>·</span>
           <span>${dateStr}</span>
-          <span>·</span>
-          <span>${splitLabel}</span>
           ${e.obs ? `<span>· ${e.obs}</span>` : ''}
         </div>
       </div>
@@ -1332,19 +1306,15 @@ function expenseItemHTML(e) {
 // ═══════════════════════════════════════════
 // ADD EXPENSE
 // ═══════════════════════════════════════════
-function setSplit(mode) {
-  splitMode = mode;
-  document.getElementById('split-50').classList.toggle('active', mode === '50');
-  document.getElementById('split-prop').classList.toggle('active', mode === 'prop');
-  document.getElementById('prop-sliders').classList.toggle('show', mode === 'prop');
+function setOwnership(mode) {
+  ownershipMode = mode;
+  document.getElementById('own-shared').classList.toggle('active', mode === 'shared');
+  document.getElementById('own-individual').classList.toggle('active', mode === 'individual');
 }
 
-function updateSlider(val) {
-  const a = parseInt(val);
-  const b = 100 - a;
-  document.getElementById('pct-a-val').textContent = `${a}%`;
-  document.getElementById('pct-b-val').textContent = `${b}%`;
-  document.getElementById('slider-b').value = b;
+function setModalOwnership(mode) {
+  document.getElementById('m-own-shared').classList.toggle('active', mode === 'shared');
+  document.getElementById('m-own-individual').classList.toggle('active', mode === 'individual');
 }
 
 function prefillQuem() {
@@ -1358,14 +1328,13 @@ function submitForm() {
   const quem  = document.getElementById('f-quem').value;
   const cat   = document.getElementById('f-cat').value;
   const obs   = document.getElementById('f-obs').value.trim();
-  const pctA  = parseInt(document.getElementById('slider-a').value);
 
   if (!desc) { showToast('Adicione uma descrição!'); return; }
   if (!valor || valor <= 0) { showToast('Valor inválido!'); return; }
   if (!data) { showToast('Selecione a data!'); return; }
 
   const expenses = getExpenses();
-  expenses.push({ id: Date.now().toString(), desc, valor, data, quem, cat, obs, splitMode, pctA });
+  expenses.push({ id: Date.now().toString(), desc, valor, data, quem, cat, obs, ownership: ownershipMode });
   saveExpenses(expenses);
 
   // Reset form
@@ -1374,7 +1343,7 @@ function submitForm() {
   document.getElementById('f-obs').value = '';
   document.getElementById('f-data').value = new Date().toISOString().split('T')[0];
   prefillQuem();
-  setSplit('50');
+  setOwnership('shared');
 
   showToast('✅ Gasto registrado!');
   switchTab('dashboard');
@@ -1398,6 +1367,7 @@ function openEdit(id) {
   document.getElementById('m-quem').value  = e.quem;
   document.getElementById('m-cat').value   = e.cat;
   document.getElementById('m-obs').value   = e.obs || '';
+  setModalOwnership(e.ownership === 'individual' ? 'individual' : 'shared');
 
   document.getElementById('modal-overlay').classList.add('open');
 }
@@ -1419,6 +1389,7 @@ function saveEdit() {
   expenses[idx].quem  = document.getElementById('m-quem').value;
   expenses[idx].cat   = document.getElementById('m-cat').value;
   expenses[idx].obs   = document.getElementById('m-obs').value.trim();
+  expenses[idx].ownership = document.getElementById('m-own-individual').classList.contains('active') ? 'individual' : 'shared';
 
   saveExpenses(expenses);
   closeModal();
